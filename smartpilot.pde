@@ -2,38 +2,52 @@
 #include <Wire.h>
 #include "smartpilot.h"
 
+int headings[10];
+unsigned int counter = 0;
+int motor_command[4]; //duty_cycle, period, on_time, direction
+
 void setup (){
+  int count;
   Serial.begin(9600); 
   youreOK = 1;			//initialize sate as all ok
   setup_motor();
   setup_compass();
-  for( int i; i<100; i++){
-    //grab some heading data and trow away the first 10 since they often are erroneous
-    desired_heading = get_heading();
+  delay(1000);  //wait for the first bit of spurious data to pass
+  int sum=0;
+  for( int i=0; i<10; i++){
+    headings[i]= get_current_heading();
+    sum += headings[i];
   }
-  delay(1000);
-  desired_heading = get_heading();  //TODO:  eventually this should average the heading over a number of samples.
+  desired_heading = sum/10;
 }
 
+int average_heading;
+int count_down=0;
 void loop (){
-    while (youreOK){
-    current_heading = get_heading();
-    course_delta = desired_heading - current_heading;
-  
-    Serial.print("Current heading: "); 
-    Serial.print(int (current_heading));
-    Serial.print("                   course_delta: ");     
-    Serial.print(int (course_delta));
-    Serial.print("                   desired_heading: ");
-    Serial.println(int (desired_heading));
-    
-    course_correction(course_delta);
-    //delay(1000);
-    // if heading off by tollerable_error do nothing
-    // else if off by small_error turn_small
-    // elsif off by medium_error turn_medium
-    // elsif off by large_error big_fix and alram
-	}
+    while (youreOK){    
+      if ( (counter % 100) ==  0 ){  //update timeaveraged heading every 300 cycles
+        update_heading_stack();
+        // Serial.print(int(counter));
+      }
+      if ( (counter % 50000) ==  0 ){  //take course correcting action on a much less frequent basis
+        average_heading = get_heading();
+        course_delta = desired_heading - average_heading;
+        Serial.print(int (counter));
+        Serial.print(":  Current heading: ");
+        Serial.print(int (average_heading));
+        Serial.print("\tcourse_delta: ");
+        Serial.print(int (course_delta));
+        Serial.print("\tdesired_heading: ");
+        Serial.println(int (desired_heading));
+        course_correction(course_delta);
+          turn(motor_command[0], motor_command[1], motor_command[2], motor_command[3]);
+          // Serial.print(int (course_delta));
+          if (motor_command[2]>0)
+            Serial.println(" correcting course");
+        counter = 0;
+      }
+      counter++;
+   } 
 }
 
 
@@ -41,15 +55,12 @@ void loop (){
 
 //begin definitiion of Motor functions
 
-int  motor_power_2 = 2;
-int  motor_power_3 = 3;
-
 int setup_motor(){
  //set initial state of motor to off
- pinMode(motor_power_2, OUTPUT);
- pinMode(motor_power_3, OUTPUT);
- digitalWrite(motor_power_2, HIGH); 
- digitalWrite(motor_power_3, LOW); 
+ pinMode(2, OUTPUT);
+ pinMode(3, OUTPUT);
+ digitalWrite(2, HIGH); 
+ digitalWrite(3, LOW); 
  pinMode(4, OUTPUT);
  pinMode(5, OUTPUT);
  digitalWrite(4, HIGH); 
@@ -67,7 +78,6 @@ int turn(int duty_cycle, int period, int on_time, int turn_direction){
   Serial.println( int(on_time));
   
   if (turn_direction<0){
-   //Serial.print("Current heading: "); 
    top_pin = 2;   //when top pin is high and bottom is low, state is off
    bottom_pin = 3; 
   }
@@ -79,64 +89,81 @@ int turn(int duty_cycle, int period, int on_time, int turn_direction){
     return 0;
   }
   
-  for (int i=0; i<pulse_count; i++){
+  for (int i=0; i < pulse_count; i++){
    //turn on motor
      digitalWrite(top_pin,LOW); 
      digitalWrite(bottom_pin,HIGH); 
      delay(on_pulse_width);
-    //turn off 
      digitalWrite(top_pin,HIGH); 
-     digitalWrite(bottom_pin,LOW); 
-     delay(period-on_pulse_width);  //now the motor is off
+     digitalWrite(bottom_pin,LOW);
+     delay(period-on_pulse_width);
   }
-     digitalWrite(top_pin,HIGH); 
-     digitalWrite(bottom_pin,LOW); 
+  return 0;
+}
+  
+int stop_turn(){
+  //turn everything off
+  digitalWrite(2, HIGH); 
+  digitalWrite(3, LOW); 
+  digitalWrite(4, HIGH); 
+  digitalWrite(5, LOW);
+}
+
+int test_motor(){
+  for (int i=0; i <= 100; i++){
+    turn(i, 100, 3000, 1 );
+    delay(2000);
+  }
 }
 //end motor section
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
 //course correction variables and functions
-int course_correction(int course_delta){  //define function to deal with course corrections
+int course_correction(int local_course_delta){  //define function to deal with course corrections
   int tollerable_error = 50;
   int small_error = 100; //this is 10 degrees
   int medium_error = 200;
   int small_turn = 2000;  //milliseconds to run the motor
   int medium_turn = 3000;  //milliseconds to run the motor
-  int big_turn = 4000;   
+  int big_turn = 4000;
+  int base_duty_cycle = 10;
+  int motor_period = 100;
   int course_delta_magnitude;
-  course_delta_magnitude = abs(course_delta);
-  if (course_delta_magnitude < tollerable_error)
+  // int motor_commands_array[4];
+  int port = -1;
+  int starboard = +1;
+  course_delta_magnitude = abs(local_course_delta);
+  motor_command[0] = base_duty_cycle;
+  motor_command[1] = 100; //motor period
+  
+  if (course_delta_magnitude < tollerable_error){
+    motor_command[2]=0;
     return 0;
-  else if (abs(course_delta) <= small_error){
-    if (course_delta < 0){
-      turn(50, 100, small_turn, -1);
-    }
-    else{
-      turn(50, 100, small_turn, +1);
-    }
+  }
+  if (course_delta < 0){
+    motor_command[3] = port;
+  }
+  else{
+    motor_command[3] = starboard;
+  }
+  if (abs(course_delta) <= small_error){
+    motor_command[2] = small_turn;
+    return small_turn;
   }
   else if (abs(course_delta) <= medium_error ){
-    if (course_delta < 0){
-      turn(50, 100, medium_turn, -1);
-    }
-    else{
-      turn(50, 100, medium_turn, +1);
-    }
+    motor_command[2] = medium_turn;
+    return medium_turn;
   }
   else{  //we are way off course
     //alarm();
-    if (course_delta < 0){
-      turn(50, 100, 5000, -1);
-     }
-     else{
-       turn(50, 100, 5000, +1);
-     }
+    motor_command[2] = big_turn;
+    return big_turn;
   }
- }
+} 
 //end course correction section 
  
- 
+////////////////////////////////////////////////////////////////////////////////////////////////////
 //heading variables and funcitoins 
 int HMC6352Address = 0x42; 
 int slaveAddress;             // This is calculated in the setup() function 
@@ -153,7 +180,22 @@ int setup_compass(){
   //end setup compass
 }
 
-int get_heading(){  //dummy definition of getheading function 
+int get_heading(){
+  int sum=0;
+  for (int i=0; i<=9; i++){
+    sum += headings[i];
+  }
+  return sum/10;
+}
+
+int update_heading_stack(){
+  for (int i=9; i>=0; i--){
+    headings[i]=headings[i-1];
+  }
+  headings[0] = get_current_heading();
+}
+
+int get_current_heading(){  //dummy definition of getheading function 
   // Flash the LED on pin 13 just to show that something is happening 
   // Also serves as an indication that we're not "stuck" waiting for TWI data 
   ledState = !ledState; 
