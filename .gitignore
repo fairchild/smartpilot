@@ -1,0 +1,8 @@
+applet/*
+applet/core.a
+applet/smartpilot.cpp
+applet/smartpilot.cpp.o
+applet/smartpilot.elf
+applet/smartpilot.hex
+applet/smartpilot.pde
+applet/smartpilot.rom
